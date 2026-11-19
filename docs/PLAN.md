@@ -12,18 +12,18 @@ Revisión del 19 de noviembre de 2026: el repositorio no contiene el enunciado n
 
 Los cuatro hilos, la FIFO de ocho órdenes, el límite de 3000 ms, la caducidad de 2000 ms, los períodos de intercambio de 10 ms, supervisión de 20 ms y muestreo de 200 ms, el umbral de antigüedad de 600 ms y el CSV son decisiones de implementación del simulador. La arquitectura del puente simulado también es una decisión técnica. No son especificaciones verificadas del robot ni requisitos confirmados del profesor.
 
-`examples/inicio_posix.c` es el ejemplo local de referencia. Su identidad con el archivo original enlazado está pendiente de cotejo; no se certifica que sea una copia intacta del material del profesor.
+`examples/posix_example.c` es la versión en inglés del ejemplo local de referencia. Su procedencia y correspondencia funcional con el archivo original enlazado están pendientes de cotejo; no es una copia intacta del material del profesor.
 
-La supervisión ya usa `timer_create`, `timer_settime` y `sigtimedwait` (espera síncrona con plazo de la familia de `sigwait`). El puente simulado entre procesos también está implementado; el siguiente bloque es identificar e integrar el SDK instalado en el Rider. `inicio_posix.c` contiene dos hilos con datos simulados y períodos de 200 y 500 ms. Se registrará por separado la demo del fabricante usada como punto de partida del Rider.
+La supervisión ya usa `timer_create`, `timer_settime` y `sigtimedwait` (espera síncrona con plazo de la familia de `sigwait`). El puente simulado entre procesos también está implementado; el siguiente bloque es identificar e integrar el SDK instalado en el Rider. `posix_example.c` contiene dos hilos con datos simulados y períodos de 200 y 500 ms. Se registrará por separado la demo del fabricante usada como punto de partida del Rider.
 
 ## Decisiones para el Rider
 
 | Aspecto | Decisión y comprobación |
 | --- | --- |
-| Entrada | Consola local para `avanzar`, `retroceder`, `parar`, `rearmar` y `salir`. Las órdenes de movimiento llevan duración acotada y caducidad. |
+| Entrada | Consola local para `forward`, `backward`, `stop`, `arm` y `quit`. Las órdenes de movimiento llevan duración acotada y caducidad. |
 | Hilos C | Entrada de órdenes, intercambio simulado, supervisión periódica y registro. La supervisión copia la telemetría bajo mutex, evalúa la copia y revalida su secuencia antes de aplicar el resultado. El registro consume eventos de un búfer acotado y escribe CSV fuera de la ruta crítica. |
 | Cola interna | FIFO de ocho órdenes con mutex y semáforos para huecos y elementos. Las órdenes normales se rechazan cuando la cola está llena. Usaremos operaciones que no esperan mientras se tiene el mutex, con el vaciado coordinado para conservar los contadores. |
-| Parada y rearme | `parar` y los fallos activan un enclavamiento fuera de la FIFO. Se vacía la FIFO y se invalida la generación anterior. El puente descarta mensajes antiguos y confirma la parada del modelo; el SDK sigue pendiente. El rearme requiere parada confirmada por el puente, muestra sana, modo de sensor normal y petición explícita. El movimiento solo se despacha tras confirmar el rearme. |
+| Parada y rearme | `stop` y los fallos activan un enclavamiento fuera de la FIFO. Se vacía la FIFO y se invalida la generación anterior. El puente descarta mensajes antiguos y confirma la parada del modelo; el SDK sigue pendiente. El rearme requiere parada confirmada por el puente, muestra sana, modo de sensor normal y petición explícita. El movimiento solo se despacha tras confirmar el rearme. |
 | IPC | Antes de crear hilos se inicia el puente con `fork` y `exec`; se recoge con `waitpid`. Dos colas POSIX llevan órdenes y respuestas. El despachador C es el único productor de órdenes y reserva capacidad para control prioritario. Se validan versión, tamaño, secuencias, generación y caducidad en un formato de 96 bytes compartido por dos programas C y probado con un emisor Python independiente. |
 | Hardware | Se propone que el puente sea el único propietario del SDK y de su interfaz de comunicación. Antes de programar llamadas físicas se verificarán la API instalada, las unidades, el tiempo de las llamadas y el mecanismo de parada del Rider. No hay llamadas al SDK en el código actual. |
 | Temporización | Se usa `CLOCK_MONOTONIC`: intercambio con espera absoluta a 10 ms y supervisión mediante temporizador POSIX a 20 ms. El puente publica muestras simuladas cada 200 ms y estado cada 100 ms. El registro escribe y vacía el archivo por evento. Se miden retrasos, intervalos, jitter, expiraciones acumuladas, CPU del supervisor y latencia de parada, que ahora incluye el IPC de ida y confirmación. Los eventos de movimiento incluyen el instante del puente para separar duración y recepción. |
@@ -38,7 +38,7 @@ La primera versión contempla avance, retroceso, parada, rearme y consulta de es
 
 | Fase | Trabajo | Resultado comprobable |
 | --- | --- | --- |
-| 0. Inventario y fuentes originales | Conservar y ejecutar `inicio_posix.c` como referencia local. Obtener y cotejar el enunciado, las instrucciones y el ejemplo originales. Identificar y registrar imagen, kernel, SDK, demo oficial, mecanismo de parada y comportamiento observable del Rider. | Requisitos con referencia a su fuente y ficha del Rider con versiones, código de partida y pasos para reproducir la demo. Podemos avanzar en simulación mientras se completa el cotejo y el inventario físico. |
+| 0. Inventario y fuentes originales | Conservar y ejecutar `posix_example.c` como referencia local. Obtener y cotejar el enunciado, las instrucciones y el ejemplo originales. Identificar y registrar imagen, kernel, SDK, demo oficial, mecanismo de parada y comportamiento observable del Rider. | Requisitos con referencia a su fuente y ficha del Rider con versiones, código de partida y pasos para reproducir la demo. Podemos avanzar en simulación mientras se completa el cotejo y el inventario físico. |
 | 1. Rider simulado en C | Crear `Makefile` y el ejecutable con temporización monotónica, estado compartido y cuatro hilos. Implementar la consola, FIFO, simulación del adaptador, caducidad, parada prioritaria, rearme y cierre por `Ctrl+C`. | Compila en Linux. Avanza y retrocede con tiempos limitados en simulación, para con cola llena y termina con `pthread_join`. |
 | 2. Supervisión y medidas | Incorporar el temporizador POSIX, vigilar edad y validez de la telemetría, registrar latencias, retrasos y plazos superados. Inyectar lecturas inválidas o caducadas y carga controlada. | CSV reproducible, parada ante fallo y recuperación sin reanudación automática. Se registra política y prioridad efectivas. |
 | 3. Puente simulado | Crear el protocolo y las colas POSIX, iniciar el puente simulado desde C y validar el intercambio. Probar saturación, órdenes caducadas en tránsito, caída o bloqueo del hijo, cierre y limpieza de recursos. | C y el puente explican la misma secuencia de eventos. El canal mantiene capacidad para control bajo saturación, invalida órdenes antiguas y limpia colas y proceso hijo. |
@@ -47,7 +47,7 @@ La primera versión contempla avance, retroceso, parada, rearme y consulta de es
 
 ## Primer paso de código
 
-Conservar `inicio_posix.c` como referencia local, comprobar la compilación y la salida en Linux y montar el simulador del Rider sin depender todavía del acceso al robot. Estos pasos de código ya están realizados; el cotejo con las fuentes originales, el inventario y las pruebas físicas del Rider siguen pendientes.
+Conservar `posix_example.c` como referencia local, comprobar la compilación y la salida en Linux y montar el simulador del Rider sin depender todavía del acceso al robot. Estos pasos de código ya están realizados; el cotejo con las fuentes originales, el inventario y las pruebas físicas del Rider siguen pendientes.
 
 ## Avance de codigo: simulador del Rider
 
@@ -92,6 +92,6 @@ Estos enlaces no acreditan por sí solos que su contenido se haya verificado en 
 - [Enunciado del profesor](https://chatgpt.com/library?file_id=libfile_e2316518fe2c81918e9b8be97553cbdf&account_id=personal)
 - [Instrucciones del Rider](https://chatgpt.com/library?file_id=libfile_f3bd072691b481919d4f6faf661f4709&account_id=personal)
 - [Especificación de arquitectura](https://chatgpt.com/library?file_id=libfile_90132a1e000c81919cb3ad36a85fe5b7&account_id=personal) y [explicación paso a paso](https://chatgpt.com/library?file_id=libfile_b015de1505e08191bd41e67fb024a40d&account_id=personal)
-- [Ejemplo docente inicio_posix.c](https://chatgpt.com/library?file_id=libfile_efa012244ad88191b4cff59fbd7490e3&account_id=personal)
+- [Ejemplo docente posix_example.c](https://chatgpt.com/library?file_id=libfile_efa012244ad88191b4cff59fbd7490e3&account_id=personal)
 - [Documentación oficial del XGO Rider 2](https://wiki.xgorobot.com/kb/the-xgo-series-robot/models/rider2)
 - [Manual de Linux para mq_send y mq_timedsend](https://www.man7.org/linux/man-pages/man2/mq_timedsend.2.html)

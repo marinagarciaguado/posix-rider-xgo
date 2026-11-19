@@ -65,7 +65,7 @@ Motivos: 0 ninguno, 1 caducado, 2 generación, 3 no armado, 4 ocupado,
 
 ## Estado y ciclo de vida
 
-El puente comienza parado y desarmado. El supervisor espera `listo` antes de
+El puente comienza parado y desarmado. El supervisor espera `ready` antes de
 crear sus cuatro hilos. Un rearme requiere una muestra sana, sensor normal y
 latido vigente. La FIFO puede aceptar órdenes durante el rearme solicitado,
 pero solo se envía un movimiento cuando el puente confirma que está armado.

@@ -2,16 +2,16 @@ CFLAGS ?= -std=c11 -Wall -Wextra -Wpedantic -O2
 
 .PHONY: all run run-sim test clean
 
-all: build/inicio_posix build/rider_sim build/rider_bridge_sim
+all: build/posix_example build/rider_sim build/rider_bridge_sim
 
 build:
 	mkdir -p $@
 
-build/inicio_posix: examples/inicio_posix.c | build
+build/posix_example: examples/posix_example.c | build
 	$(CC) $(CPPFLAGS) $(CFLAGS) -pthread $(LDFLAGS) -o $@ $< $(LDLIBS)
 
-run: build/inicio_posix
-	./build/inicio_posix
+run: build/posix_example
+	./build/posix_example
 
 build/rider_sim: src/rider_sim.c src/rider_ipc.c include/rider_ipc.h include/rider_protocol.h | build
 	$(CC) $(CPPFLAGS) $(CFLAGS) -Iinclude -pthread $(LDFLAGS) -o $@ src/rider_sim.c src/rider_ipc.c $(LDLIBS) -lrt
@@ -30,4 +30,4 @@ test: build/rider_sim build/rider_bridge_sim build/test_ipc
 	python3 -m unittest discover -s tests -p 'test_*.py' -v
 
 clean:
-	$(RM) build/inicio_posix build/rider_sim build/rider_bridge_sim build/test_ipc
+	$(RM) build/posix_example build/rider_sim build/rider_bridge_sim build/test_ipc

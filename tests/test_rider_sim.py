@@ -1,4 +1,4 @@
-"""Pruebas de integracion en Linux; solo biblioteca estandar de Python."""
+"""Linux integration tests using only the Python standard library."""
 import csv
 import os
 from pathlib import Path
@@ -8,17 +8,17 @@ import tempfile
 import time
 import unittest
 
-BINARIO = Path(__file__).resolve().parents[1] / "build" / "rider_sim"
+BINARY = Path(__file__).resolve().parents[1] / "build" / "rider_sim"
 
 
-class Simulador(unittest.TestCase):
+class Simulator(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
-        self.csv = Path(self.tmp.name) / "eventos.csv"
-        self.salida = tempfile.TemporaryFile(mode="w+")
+        self.csv = Path(self.tmp.name) / "events.csv"
+        self.output = tempfile.TemporaryFile(mode="w+")
         self.p = subprocess.Popen(
-            [str(BINARIO), str(self.csv)], stdin=subprocess.PIPE,
-            stdout=self.salida, stderr=subprocess.STDOUT, text=True,
+            [str(BINARY), str(self.csv)], stdin=subprocess.PIPE,
+            stdout=self.output, stderr=subprocess.STDOUT, text=True,
         )
 
     def tearDown(self):
@@ -27,210 +27,210 @@ class Simulador(unittest.TestCase):
         self.p.wait(timeout=3)
         if self.p.stdin and not self.p.stdin.closed:
             self.p.stdin.close()
-        self.salida.close()
+        self.output.close()
         self.tmp.cleanup()
 
-    def enviar(self, texto):
-        self.p.stdin.write(texto + "\n")
+    def send(self, text):
+        self.p.stdin.write(text + "\n")
         self.p.stdin.flush()
 
-    def eventos(self):
+    def events(self):
         if not self.csv.exists():
             return []
         with self.csv.open() as f:
             return [r for r in csv.DictReader(f) if all(v is not None for v in r.values())]
 
-    def esperar(self, nombre, cantidad=1, plazo=5):
-        limite = time.monotonic() + plazo
-        while time.monotonic() < limite:
-            filas = [r for r in self.eventos() if r["evento"] == nombre]
-            if len(filas) >= cantidad:
-                return filas[-1]
+    def wait_for(self, name, count=1, timeout=5):
+        limit = time.monotonic() + timeout
+        while time.monotonic() < limit:
+            rows = [r for r in self.events() if r["event"] == name]
+            if len(rows) >= count:
+                return rows[-1]
             if self.p.poll() is not None:
                 break
             time.sleep(0.01)
-        self.salida.seek(0)
-        self.fail(f"No aparece {nombre} ({cantidad}):\n{self.salida.read()}")
+        self.output.seek(0)
+        self.fail(f"Missing {name} ({count}):\n{self.output.read()}")
 
-    def cerrar(self, eof=False):
+    def request_shutdown(self, eof=False):
         if eof:
             self.p.stdin.close()
         else:
-            self.enviar("salir")
+            self.send("quit")
         self.assertEqual(self.p.wait(timeout=3), 0)
-        self.assertEqual(self.eventos()[-1]["evento"], "cierre_completado")
-        self.salida.seek(0)
-        salida = self.salida.read()
-        self.assertIn("4 hilos unidos", salida)
-        self.assertIn("eventos perdidos=0", salida)
-        self.comprobar_limpieza()
+        self.assertEqual(self.events()[-1]["event"], "shutdown_completed")
+        self.output.seek(0)
+        output = self.output.read()
+        self.assertIn("4 threads joined", output)
+        self.assertIn("dropped events=0", output)
+        self.assert_cleanup()
 
-    def comprobar_limpieza(self):
+    def assert_cleanup(self):
         self.assertEqual(list(Path("/dev/mqueue").glob(f"rider_{self.p.pid}_*")), [])
-        hijos = [r for r in self.eventos() if r["evento"] == "puente_iniciado"]
-        if hijos:
-            self.assertFalse(Path(f"/proc/{hijos[0]['id']}").exists(), "Hijo sin recoger")
+        children = [r for r in self.events() if r["event"] == "bridge_started"]
+        if children:
+            self.assertFalse(Path(f"/proc/{children[0]['id']}").exists(), "Child was not reaped")
 
-    def test_movimientos_limitados_en_ambas_direcciones(self):
-        self.enviar("avanzar 100")
-        self.esperar("rechazada_enclavamiento")
-        self.enviar("rearmar\navanzar 100\nretroceder 100")
-        self.esperar("movimiento_completado", 2)
-        inicios = [r for r in self.eventos() if r["evento"] == "movimiento_iniciado"]
-        self.assertEqual([r["direccion"] for r in inicios], ["1", "-1"])
-        fines = [r for r in self.eventos() if r["evento"] == "movimiento_completado"]
-        for inicio, fin in zip(inicios, fines):
-            self.assertGreaterEqual(int(fin["instante_puente_ms"]) - int(inicio["instante_puente_ms"]), 100)
-            self.assertEqual(fin["direccion"], "0")
-        self.cerrar()
+    def test_timed_motion_in_both_directions(self):
+        self.send("forward 100")
+        self.wait_for("rejected_latched")
+        self.send("arm\nforward 100\nbackward 100")
+        self.wait_for("movement_completed", 2)
+        starts = [r for r in self.events() if r["event"] == "movement_started"]
+        self.assertEqual([r["direction"] for r in starts], ["1", "-1"])
+        completions = [r for r in self.events() if r["event"] == "movement_completed"]
+        for start_ms, end in zip(starts, completions):
+            self.assertGreaterEqual(int(end["bridge_timestamp_ms"]) - int(start_ms["bridge_timestamp_ms"]), 100)
+            self.assertEqual(end["direction"], "0")
+        self.request_shutdown()
 
-    def test_parada_con_cola_llena_y_rearme_sin_reanudacion(self):
-        self.enviar("rearmar\navanzar 3000")
-        self.esperar("movimiento_iniciado")
-        self.enviar("avanzar 100\n" * 12)
-        self.esperar("rechazada_cola_llena")
-        self.enviar("parar")
-        parada = self.esperar("parada_solicitada")
-        confirmacion = self.esperar("parada_confirmada")
-        self.assertEqual(parada["pendientes"], "0")
-        self.assertEqual(confirmacion["direccion"], "0")
-        self.enviar("avanzar 100")
-        self.esperar("rechazada_enclavamiento")
-        self.enviar("rearmar\nestado")
-        estado = self.esperar("estado_armado")
-        self.assertEqual(estado["direccion"], "0")
-        self.assertEqual(estado["pendientes"], "0")
-        self.assertEqual(len([r for r in self.eventos() if r["evento"] == "movimiento_iniciado"]), 1)
-        self.enviar("retroceder 80")
-        self.esperar("movimiento_completado")
-        inicios = [r for r in self.eventos() if r["evento"] == "movimiento_iniciado"]
-        self.assertEqual(len(inicios), 2)
-        self.assertNotEqual(inicios[0]["generacion"], inicios[1]["generacion"])
-        self.cerrar()
+    def test_stop_with_full_queue_and_no_automatic_resume(self):
+        self.send("arm\nforward 3000")
+        self.wait_for("movement_started")
+        self.send("forward 100\n" * 12)
+        self.wait_for("rejected_queue_full")
+        self.send("stop")
+        stop_event = self.wait_for("stop_requested")
+        confirmation = self.wait_for("stop_confirmed")
+        self.assertEqual(stop_event["pending"], "0")
+        self.assertEqual(confirmation["direction"], "0")
+        self.send("forward 100")
+        self.wait_for("rejected_latched")
+        self.send("arm\nstate")
+        state = self.wait_for("state_armed")
+        self.assertEqual(state["direction"], "0")
+        self.assertEqual(state["pending"], "0")
+        self.assertEqual(len([r for r in self.events() if r["event"] == "movement_started"]), 1)
+        self.send("backward 80")
+        self.wait_for("movement_completed")
+        starts = [r for r in self.events() if r["event"] == "movement_started"]
+        self.assertEqual(len(starts), 2)
+        self.assertNotEqual(starts[0]["generation"], starts[1]["generation"])
+        self.request_shutdown()
 
-    def test_orden_caducada_no_se_ejecuta(self):
-        self.enviar("rearmar\navanzar 2500")
-        self.esperar("movimiento_iniciado")
-        self.enviar("retroceder 100")
-        self.esperar("orden_descartada")
-        self.assertEqual(len([r for r in self.eventos() if r["evento"] == "movimiento_iniciado"]), 1)
-        self.cerrar()
+    def test_expired_command_is_not_executed(self):
+        self.send("arm\nforward 2500")
+        self.wait_for("movement_started")
+        self.send("backward 100")
+        self.wait_for("command_discarded")
+        self.assertEqual(len([r for r in self.events() if r["event"] == "movement_started"]), 1)
+        self.request_shutdown()
 
-    def test_entrada_invalida_y_eof(self):
-        self.enviar("rearmar\navanzar 0\navanzar -1\navanzar 3001\navanzar 9999999999999999999999\navanzar 12x")
-        self.esperar("duracion_invalida", 5)
-        self.enviar("desconocido\nparar extra\navanzar 10 extra")
-        self.esperar("comando_invalido", 3)
-        self.enviar("x" * 200)
-        self.esperar("linea_demasiado_larga")
-        self.cerrar(eof=True)
+    def test_invalid_input_and_eof(self):
+        self.send("arm\nforward 0\nforward -1\nforward 3001\nforward 9999999999999999999999\nforward 12x")
+        self.wait_for("invalid_duration", 5)
+        self.send("desconocido\nstop extra\nforward 10 extra")
+        self.wait_for("invalid_command", 3)
+        self.send("x" * 200)
+        self.wait_for("line_too_long")
+        self.request_shutdown(eof=True)
 
-    def test_eof_durante_movimiento(self):
-        self.enviar("rearmar\navanzar 3000")
-        self.esperar("movimiento_iniciado")
-        self.cerrar(eof=True)
-        self.assertIn("parada_confirmada", [r["evento"] for r in self.eventos()])
+    def test_eof_during_motion(self):
+        self.send("arm\nforward 3000")
+        self.wait_for("movement_started")
+        self.request_shutdown(eof=True)
+        self.assertIn("stop_confirmed", [r["event"] for r in self.events()])
 
-    def test_sigint_sin_entrada(self):
-        self.enviar("estado")
-        self.esperar("estado_enclavado")
+    def test_sigint_without_input(self):
+        self.send("state")
+        self.wait_for("state_latched")
         self.p.send_signal(signal.SIGINT)
         self.assertEqual(self.p.wait(timeout=3), 0)
-        self.assertIn("senal_recibida", [r["evento"] for r in self.eventos()])
-        self.assertEqual(self.eventos()[-1]["evento"], "cierre_completado")
+        self.assertIn("signal_received", [r["event"] for r in self.events()])
+        self.assertEqual(self.events()[-1]["event"], "shutdown_completed")
 
-    def test_sigterm_durante_movimiento(self):
-        self.enviar("rearmar\navanzar 3000")
-        self.esperar("movimiento_iniciado")
+    def test_sigterm_during_motion(self):
+        self.send("arm\nforward 3000")
+        self.wait_for("movement_started")
         self.p.send_signal(signal.SIGTERM)
         self.assertEqual(self.p.wait(timeout=3), 0)
-        self.assertIn("parada_confirmada", [r["evento"] for r in self.eventos()])
-        self.assertEqual(self.eventos()[-1]["evento"], "cierre_completado")
+        self.assertIn("stop_confirmed", [r["event"] for r in self.events()])
+        self.assertEqual(self.events()[-1]["event"], "shutdown_completed")
 
-    def comprobar_fallo_y_recuperacion(self, modo, nombre):
-        self.enviar("rearmar\navanzar 3000")
-        self.esperar("movimiento_iniciado")
-        self.enviar("retroceder 100\nsensor " + modo)
-        fallo = self.esperar(nombre)
-        confirmacion = self.esperar("parada_confirmada")
-        self.assertEqual(fallo["pendientes"], "0")
-        self.assertEqual(confirmacion["direccion"], "0")
-        self.assertGreaterEqual(int(confirmacion["latencia_parada_us"]), 0)
-        if modo == "invalido":
-            self.assertEqual(fallo["valida"], "0")
+    def check_fault_and_recovery(self, mode, name):
+        self.send("arm\nforward 3000")
+        self.wait_for("movement_started")
+        self.send("backward 100\nsensor " + mode)
+        fault = self.wait_for(name)
+        confirmation = self.wait_for("stop_confirmed")
+        self.assertEqual(fault["pending"], "0")
+        self.assertEqual(confirmation["direction"], "0")
+        self.assertGreaterEqual(int(confirmation["stop_latency_us"]), 0)
+        if mode == "invalid":
+            self.assertEqual(fault["valid"], "0")
         else:
-            self.assertGreater(int(fallo["edad_telemetria_ms"]), 600)
-        self.enviar("rearmar")
-        self.esperar("rearme_rechazado_telemetria")
-        self.enviar("sensor normal")
-        self.esperar("telemetria_recuperada")
-        self.enviar("avanzar 100\nestado")
-        self.esperar("rechazada_enclavamiento")
-        self.esperar("estado_enclavado")
-        self.assertEqual(len([r for r in self.eventos() if r["evento"] == "movimiento_iniciado"]), 1)
-        self.enviar("rearmar\nretroceder 80")
-        self.esperar("movimiento_completado")
-        inicios = [r for r in self.eventos() if r["evento"] == "movimiento_iniciado"]
-        self.assertEqual(len(inicios), 2)
-        self.assertEqual(inicios[-1]["direccion"], "-1")
-        self.assertNotEqual(inicios[0]["generacion"], inicios[-1]["generacion"])
-        self.cerrar()
+            self.assertGreater(int(fault["sample_age_ms"]), 600)
+        self.send("arm")
+        self.wait_for("arm_rejected_telemetry")
+        self.send("sensor normal")
+        self.wait_for("telemetry_recovered")
+        self.send("forward 100\nstate")
+        self.wait_for("rejected_latched")
+        self.wait_for("state_latched")
+        self.assertEqual(len([r for r in self.events() if r["event"] == "movement_started"]), 1)
+        self.send("arm\nbackward 80")
+        self.wait_for("movement_completed")
+        starts = [r for r in self.events() if r["event"] == "movement_started"]
+        self.assertEqual(len(starts), 2)
+        self.assertEqual(starts[-1]["direction"], "-1")
+        self.assertNotEqual(starts[0]["generation"], starts[-1]["generation"])
+        self.request_shutdown()
 
-    def test_telemetria_invalida_para_y_exige_rearme(self):
-        self.comprobar_fallo_y_recuperacion("invalido", "fallo_telemetria_invalida")
+    def test_invalid_telemetry_stops_and_requires_arm(self):
+        self.check_fault_and_recovery("invalid", "invalid_telemetry_fault")
 
-    def test_telemetria_congelada_para_y_exige_rearme(self):
-        self.comprobar_fallo_y_recuperacion("congelado", "fallo_telemetria_antigua")
+    def test_frozen_telemetry_stops_and_requires_arm(self):
+        self.check_fault_and_recovery("frozen", "stale_telemetry_fault")
 
-    def test_temporizador_medidas_y_planificacion(self):
-        self.esperar("ciclo_supervision", 3)
-        self.enviar("carga 120")
-        # La carga acumula expiraciones: se miden al consumir la senal siguiente.
-        limite = time.monotonic() + 5
-        while time.monotonic() < limite:
-            ciclos = [r for r in self.eventos() if r["evento"] == "ciclo_supervision"]
-            if any(int(r["expiraciones_perdidas"]) > 0 for r in ciclos):
+    def test_timer_metrics_and_scheduling(self):
+        self.wait_for("supervision_cycle", 3)
+        self.send("load 120")
+        # Measure accumulated expirations when the next timer notification is consumed.
+        limit = time.monotonic() + 5
+        while time.monotonic() < limit:
+            cycles = [r for r in self.events() if r["event"] == "supervision_cycle"]
+            if any(int(r["missed_expirations"]) > 0 for r in cycles):
                 break
             time.sleep(0.01)
         else:
-            self.fail("La carga no produjo expiraciones acumuladas")
-        self.assertTrue(any(int(r["retraso_us"]) >= 100000 for r in ciclos))
-        self.assertTrue(all(int(r["retraso_us"]) >= 0 for r in ciclos))
-        self.assertTrue(all(int(r["cpu_hilo_us"]) >= 0 for r in ciclos))
-        self.assertTrue(any(int(r["intervalo_us"]) > 0 for r in ciclos))
-        planificacion = [r for r in self.eventos() if r["evento"].startswith("planificacion_")]
-        self.assertEqual(len(planificacion), 4)
-        self.assertTrue(all(int(r["politica"]) >= 0 for r in planificacion))
-        self.assertTrue(all(int(r["prioridad"]) >= 0 for r in planificacion))
-        self.cerrar()
+            self.fail("Injected load did not produce timer overruns")
+        self.assertTrue(any(int(r["lateness_us"]) >= 100000 for r in cycles))
+        self.assertTrue(all(int(r["lateness_us"]) >= 0 for r in cycles))
+        self.assertTrue(all(int(r["thread_cpu_us"]) >= 0 for r in cycles))
+        self.assertTrue(any(int(r["interval_us"]) > 0 for r in cycles))
+        scheduling = [r for r in self.events() if r["event"].startswith("scheduling_")]
+        self.assertEqual(len(scheduling), 4)
+        self.assertTrue(all(int(r["policy"]) >= 0 for r in scheduling))
+        self.assertTrue(all(int(r["priority"]) >= 0 for r in scheduling))
+        self.request_shutdown()
 
-    def test_caida_del_hijo_se_detecta_sin_confirmar_parada(self):
-        self.enviar("rearmar\navanzar 3000")
-        self.esperar("movimiento_iniciado")
-        hijo = int(self.esperar("puente_iniciado")["id"])
-        os.kill(hijo, signal.SIGKILL)
+    def test_child_death_does_not_confirm_stop(self):
+        self.send("arm\nforward 3000")
+        self.wait_for("movement_started")
+        child = int(self.wait_for("bridge_started")["id"])
+        os.kill(child, signal.SIGKILL)
         self.assertNotEqual(self.p.wait(timeout=4), 0)
-        self.assertIn("puente_caido", [r["evento"] for r in self.eventos()])
-        self.assertNotIn("parada_confirmada", [r["evento"] for r in self.eventos()])
-        self.comprobar_limpieza()
+        self.assertIn("bridge_exited_unexpectedly", [r["event"] for r in self.events()])
+        self.assertNotIn("stop_confirmed", [r["event"] for r in self.events()])
+        self.assert_cleanup()
 
-    def test_bloqueo_del_hijo_no_bloquea_el_cierre(self):
-        self.enviar("rearmar\navanzar 3000")
-        self.esperar("movimiento_iniciado")
-        hijo = int(self.esperar("puente_iniciado")["id"])
-        os.kill(hijo, signal.SIGSTOP)
+    def test_stalled_child_does_not_block_shutdown(self):
+        self.send("arm\nforward 3000")
+        self.wait_for("movement_started")
+        child = int(self.wait_for("bridge_started")["id"])
+        os.kill(child, signal.SIGSTOP)
         self.assertNotEqual(self.p.wait(timeout=4), 0)
-        self.assertIn("puente_sin_respuesta", [r["evento"] for r in self.eventos()])
-        self.assertNotIn("parada_confirmada", [r["evento"] for r in self.eventos()])
-        self.comprobar_limpieza()
+        self.assertIn("bridge_unresponsive", [r["event"] for r in self.events()])
+        self.assertNotIn("stop_confirmed", [r["event"] for r in self.events()])
+        self.assert_cleanup()
 
-    def test_fallo_de_exec_limpia_las_colas(self):
-        self.cerrar()
-        p = subprocess.Popen([str(BINARIO), str(self.csv), "/no/existe/puente"],
+    def test_exec_failure_cleans_up_queues(self):
+        self.request_shutdown()
+        p = subprocess.Popen([str(BINARY), str(self.csv), "/missing/bridge"],
                              stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
         _, error = p.communicate(timeout=4)
         self.assertNotEqual(p.returncode, 0)
-        self.assertIn("inicio del puente", error)
+        self.assertIn("bridge startup", error)
         self.assertEqual(list(Path("/dev/mqueue").glob(f"rider_{p.pid}_*")), [])
 
 
