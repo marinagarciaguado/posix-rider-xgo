@@ -1,3 +1,7 @@
-/build/
-/rider_sim.csv
+/.venv/
+/bin/
+/logs/
 __pycache__/
+.pytest_cache/
+core
+core.*

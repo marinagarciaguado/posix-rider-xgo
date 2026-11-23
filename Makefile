@@ -1,33 +1,33 @@
-CFLAGS ?= -std=c11 -Wall -Wextra -Wpedantic -O2
+CC = gcc
+CPPFLAGS += -D_POSIX_C_SOURCE=200809L -Iinclude -Iconfig
+CFLAGS += -std=c11 -O2 -Wall -Wextra -Wpedantic -pthread
+LDLIBS += -pthread -lrt
 
-.PHONY: all run run-sim test clean
+SRC = $(wildcard src/*.c)
+OBJ = $(SRC:src/%.c=bin/%.o)
+TARGET = bin/xgo_supervisor
+QUEUE_TEST = bin/test_cmd_queue
 
-all: build/posix_example build/rider_sim build/rider_bridge_sim
+.PHONY: all clean test
+all: $(TARGET)
 
-build:
+$(TARGET): $(OBJ)
+	$(CC) $(LDFLAGS) $^ $(LDLIBS) -o $@
+
+bin/%.o: src/%.c | bin
+	$(CC) $(CPPFLAGS) $(CFLAGS) -MMD -MP -c $< -o $@
+
+bin:
 	mkdir -p $@
 
-build/posix_example: examples/posix_example.c | build
-	$(CC) $(CPPFLAGS) $(CFLAGS) -pthread $(LDFLAGS) -o $@ $< $(LDLIBS)
+$(QUEUE_TEST): tests/test_cmd_queue.c bin/cmd_queue.o bin/scheduler_utils.o bin/ipc_protocol.o
+	$(CC) $(CPPFLAGS) $(CFLAGS) -UNDEBUG $(LDFLAGS) $^ $(LDLIBS) -o $@
 
-run: build/posix_example
-	./build/posix_example
+test: all $(QUEUE_TEST)
+	./$(QUEUE_TEST)
+	python3 -B -m unittest discover
 
-build/rider_sim: src/rider_sim.c src/rider_ipc.c include/rider_ipc.h include/rider_protocol.h | build
-	$(CC) $(CPPFLAGS) $(CFLAGS) -Iinclude -pthread $(LDFLAGS) -o $@ src/rider_sim.c src/rider_ipc.c $(LDLIBS) -lrt
-
-build/rider_bridge_sim: src/rider_bridge_sim.c src/rider_ipc.c include/rider_ipc.h include/rider_protocol.h | build
-	$(CC) $(CPPFLAGS) $(CFLAGS) -Iinclude $(LDFLAGS) -o $@ src/rider_bridge_sim.c src/rider_ipc.c $(LDLIBS) -lrt
-
-run-sim: build/rider_sim build/rider_bridge_sim
-	./build/rider_sim
-
-build/test_ipc: tests/test_ipc.c src/rider_ipc.c include/rider_ipc.h include/rider_protocol.h | build
-	$(CC) $(CPPFLAGS) $(CFLAGS) -Iinclude $(LDFLAGS) -o $@ tests/test_ipc.c src/rider_ipc.c $(LDLIBS) -lrt
-
-test: build/rider_sim build/rider_bridge_sim build/test_ipc
-	./build/test_ipc
-	python3 -m unittest discover -s tests -p 'test_*.py' -v
+-include $(OBJ:.o=.d)
 
 clean:
-	$(RM) build/posix_example build/rider_sim build/rider_bridge_sim build/test_ipc
+	rm -f $(TARGET) $(QUEUE_TEST) $(OBJ) $(OBJ:.o=.d)
